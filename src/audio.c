@@ -65,6 +65,9 @@ bool audio_init(Audio *audio)
 
 void audio_set_beeping(Audio *audio, bool beeping)
 {
+    if (!audio->initialized) {
+        return; /* no device opened (see audio_init): nothing is listening */
+    }
     SDL_AtomicSet(&audio->beeping, beeping ? 1 : 0);
 }
 

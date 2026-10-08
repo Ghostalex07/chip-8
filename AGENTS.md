@@ -16,7 +16,9 @@ stay SDL-free so it can run headless in test harnesses.
   warnings**.
 - Errors go to stderr in English. Bad ROMs return false from
   `chip8_load_rom`; stack overflow/underflow and unknown opcodes print a
-  message and skip the instruction instead of aborting.
+  message and skip the instruction instead of aborting. Each unique
+  `(pc, opcode)` error prints only once (dedup log in `Chip8`), so a
+  broken ROM cannot flood stderr.
 - Opcode comments state the spec behavior and every quirk effect in
   place; quirks default to original COSMAC VIP (`chip8_init`).
 - All five quirks live in `Chip8Quirks` and are overridable from the CLI
@@ -28,5 +30,9 @@ stay SDL-free so it can run headless in test harnesses.
   release. These are suite-driven decisions.
 - Verification: `SUITE_BIN=<suite>/bin tests/run_tests.sh` runs the
   Timendus chip-8-test-suite headless (framebuffer dumps + glyph-marker
-  checkers in `tests/`). Suite ROMs are GPL and not bundled; binaries
-  build into `tests/.build/` (gitignored).
+  checkers in `tests/`) plus `tests/test_errors.c`, which locks the
+  error-handling conventions above (12-bit PC wrap, dedup, ROM-load
+  failures) and `tests/test_catch.c`, which plays the bundled game
+  (`games/catch.ch8`, assembled from `games/catch.asm` by
+  `games/assemble.py` on every run). Suite ROMs are GPL and not bundled;
+  binaries build into `tests/.build/` (gitignored).

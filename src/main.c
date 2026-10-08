@@ -29,11 +29,11 @@ static void print_usage(const char *program)
     fprintf(stderr, "    --jump-vx      BNNN jumps to NNN+VX instead of NNN+V0\n");
 }
 
-static bool parse_positive_int(const char *flag, const char *text, int *out)
+static bool parse_positive_int(const char *flag, const char *text, int max, int *out)
 {
     char *end;
     long value = strtol(text, &end, 10);
-    if (end == text || *end != '\0' || value <= 0 || value > INT_MAX) {
+    if (end == text || *end != '\0' || value <= 0 || value > max) {
         fprintf(stderr, "Invalid value for %s: '%s'\n", flag, text);
         return false;
     }
@@ -53,7 +53,7 @@ static bool parse_arguments(int argc, char **argv, const char **rom_path, int *c
                 return false;
             }
             i++;
-            if (!parse_positive_int("--cycles", argv[i], cycles)) {
+            if (!parse_positive_int("--cycles", argv[i], 100000, cycles)) {
                 return false;
             }
         } else if (strcmp(argv[i], "--scale") == 0) {
@@ -62,7 +62,8 @@ static bool parse_arguments(int argc, char **argv, const char **rom_path, int *c
                 return false;
             }
             i++;
-            if (!parse_positive_int("--scale", argv[i], scale)) {
+            if (!parse_positive_int("--scale", argv[i],
+                                    INT_MAX / CHIP8_DISPLAY_WIDTH, scale)) {
                 return false;
             }
         } else if (strcmp(argv[i], "--no-vblank") == 0) {
@@ -135,9 +136,29 @@ int main(int argc, char **argv)
     }
 
     const Uint64 performance_frequency = SDL_GetPerformanceFrequency();
+    double delay_credit = 0.0; /* sleep milliseconds owed to the pacer */
+    Uint64 previous_frame = 0;
+    bool have_previous_frame = false;
 
     while (!input.quit) {
-        const Uint64 frame_start = SDL_GetPerformanceCounter();
+        /* Fixed 60 FPS pace: the timers and the emulated CPU speed depend
+         * on this loop. The sleep budget is accumulated as an error term
+         * instead of truncating a fractional millisecond every frame, so
+         * the loop runs at exactly 60 Hz (the old way averaged ~60.7). */
+        const Uint64 now = SDL_GetPerformanceCounter();
+        if (have_previous_frame) {
+            const double period_ms =
+                (double)(now - previous_frame) * 1000.0 /
+                (double)performance_frequency;
+            delay_credit += TARGET_FRAME_MS - period_ms;
+            if (delay_credit > 4.0 * TARGET_FRAME_MS) {
+                delay_credit = 4.0 * TARGET_FRAME_MS; /* anti-spiral guard */
+            } else if (delay_credit < -TARGET_FRAME_MS) {
+                delay_credit = 0.0;
+            }
+        }
+        previous_frame = now;
+        have_previous_frame = true;
 
         input_poll(&input);
         if (input.quit) {
@@ -154,12 +175,8 @@ int main(int argc, char **argv)
         display_render(&display, chip8.display);
         chip8_frame_end(&chip8); /* releases a CPU waiting for v-blank */
 
-        /* Fixed 60 FPS pace: the timers depend on this loop. */
-        const double elapsed_ms =
-            (double)(SDL_GetPerformanceCounter() - frame_start) * 1000.0 /
-            (double)performance_frequency;
-        if (elapsed_ms < TARGET_FRAME_MS) {
-            SDL_Delay((Uint32)(TARGET_FRAME_MS - elapsed_ms));
+        if (delay_credit >= 1.0) {
+            SDL_Delay((Uint32)delay_credit);
         }
     }
 

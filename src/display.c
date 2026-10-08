@@ -41,18 +41,27 @@ void display_render(Display *display, const uint8_t *framebuffer)
     SDL_RenderClear(display->renderer);
 
     SDL_SetRenderDrawColor(display->renderer, 255, 255, 255, 255);
-    SDL_Rect rect;
-    rect.w = display->scale;
-    rect.h = display->scale;
+
+    /* Collect the lit pixels and hand them to SDL in a single call. The
+     * output is identical to one SDL_RenderFillRect per pixel, but a full
+     * screen used to mean 2048 SDL calls (and a much larger vertex flush)
+     * per frame. */
+    SDL_Rect rects[CHIP8_DISPLAY_WIDTH * CHIP8_DISPLAY_HEIGHT];
+    int count = 0;
 
     for (int row = 0; row < CHIP8_DISPLAY_HEIGHT; row++) {
         for (int col = 0; col < CHIP8_DISPLAY_WIDTH; col++) {
             if (framebuffer[row * CHIP8_DISPLAY_WIDTH + col] != 0) {
-                rect.x = col * display->scale;
-                rect.y = row * display->scale;
-                SDL_RenderFillRect(display->renderer, &rect);
+                rects[count].x = col * display->scale;
+                rects[count].y = row * display->scale;
+                rects[count].w = display->scale;
+                rects[count].h = display->scale;
+                count++;
             }
         }
+    }
+    if (count > 0) {
+        SDL_RenderFillRects(display->renderer, rects, count);
     }
 
     SDL_RenderPresent(display->renderer);

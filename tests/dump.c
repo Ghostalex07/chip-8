@@ -7,10 +7,19 @@
 int main(int argc, char **argv)
 {
     if (argc < 2) {
-        fprintf(stderr, "Uso: %s <rom> [ciclos]\n", argv[0]);
+        fprintf(stderr, "Usage: %s <rom> [cycles]\n", argv[0]);
         return 1;
     }
-    int cycles = argc > 2 ? atoi(argv[2]) : 1000;
+    int cycles = 1000;
+    if (argc > 2) {
+        char *end;
+        long value = strtol(argv[2], &end, 10);
+        if (end == argv[2] || *end != '\0' || value <= 0 || value > 1000000000L) {
+            fprintf(stderr, "Invalid cycle count: '%s'\n", argv[2]);
+            return 1;
+        }
+        cycles = (int)value;
+    }
 
     Chip8 c;
     chip8_init(&c);
@@ -55,10 +64,16 @@ int main(int argc, char **argv)
 
     if (argc > 3) {
         FILE *raw = fopen(argv[3], "wb");
-        if (raw != NULL) {
-            fwrite(c.display, 1, sizeof(c.display), raw);
-            fclose(raw);
+        if (raw == NULL) {
+            fprintf(stderr, "Could not open output file '%s'\n", argv[3]);
+            return 1;
         }
+        if (fwrite(c.display, 1, sizeof(c.display), raw) != sizeof(c.display)) {
+            fprintf(stderr, "Could not write output file '%s'\n", argv[3]);
+            fclose(raw);
+            return 1;
+        }
+        fclose(raw);
     }
     return 0;
 }

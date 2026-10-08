@@ -38,6 +38,12 @@ mkdir -p "$BUILD"
 echo "== build harnesses =="
 $CC $CFLAGS -o "$BUILD/dump" tests/dump.c src/chip8.c || exit 1
 $CC $CFLAGS -o "$BUILD/fx0a" tests/test_fx0a.c src/chip8.c || exit 1
+$CC $CFLAGS -o "$BUILD/errors" tests/test_errors.c src/chip8.c || exit 1
+$CC $CFLAGS -o "$BUILD/catch" tests/test_catch.c src/chip8.c || exit 1
+
+# The bundled game is assembled from source on every run: games/catch.asm
+# is the source of truth, games/catch.ch8 the build product.
+python3 games/assemble.py || exit 1
 
 # run <rom> <cycles> <fb> [poke] [keys] -> 0 when stderr stays empty
 run() {
@@ -53,6 +59,27 @@ run() {
 }
 
 echo "== tests =="
+
+# AGENTS.md error-handling conventions: stderr in English, the bad
+# instruction is skipped (never abort), 12-bit PC wrap, message
+# deduplication and ROM-load failures. Needs no suite ROMs.
+if "$BUILD/errors" >"$BUILD/errors.log"; then
+    pass "error-handling"
+else
+    sed 's/^/  /' "$BUILD/errors.log"
+    fail "error-handling"
+fi
+
+# The bundled game (games/catch.ch8) played headless: catching scores,
+# missing does not, the paddle reaches its edges, the score is drawn.
+if "$BUILD/catch" >"$BUILD/catch.log" 2>"$BUILD/catch.err" &&
+   [ ! -s "$BUILD/catch.err" ]; then
+    pass "catch-game"
+else
+    sed 's/^/  /' "$BUILD/catch.log"
+    sed 's/^/  /' "$BUILD/catch.err"
+    fail "catch-game"
+fi
 
 if run 1-chip8-logo.ch8 3000 "$BUILD/fb_logo.bin"; then pass "1-chip8-logo"; else fail "1-chip8-logo"; fi
 if run 2-ibm-logo.ch8 3000 "$BUILD/fb_ibm.bin"; then pass "2-ibm-logo"; else fail "2-ibm-logo"; fi

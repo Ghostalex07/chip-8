@@ -17,6 +17,10 @@
 #define CHIP8_STACK_DEPTH 16
 #define CHIP8_KEY_COUNT 16
 
+/* Size of the per-instance log that deduplicates cycle-time error
+ * messages (each unique (pc, opcode) pair prints at most once). */
+#define CHIP8_ERROR_LOG_SIZE 32
+
 /*
  * Quirks: the CHIP-8 specification is ambiguous on several opcodes and
  * modern emulators disagree on the right behavior. They are grouped here
@@ -66,6 +70,12 @@ typedef struct {
     int waiting_key;                 /* latched key for FX0A, -1 until pressed */
     bool waiting_for_frame;          /* DXYN drawn; CPU blocked until frame end */
     Chip8Quirks quirks;
+    uint32_t rng_state;              /* xorshift32 state used by CXNN */
+    /* Cycle-time errors print once per unique (pc, opcode) pair, so a
+     * broken ROM looping on a bad instruction cannot flood stderr. */
+    uint16_t error_log_pc[CHIP8_ERROR_LOG_SIZE];
+    uint16_t error_log_opcode[CHIP8_ERROR_LOG_SIZE];
+    uint8_t error_log_count;
 } Chip8;
 
 /* Sets up the machine: zeroed memory, font at 0x050, PC at 0x200. */

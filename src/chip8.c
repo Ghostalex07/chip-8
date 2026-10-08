@@ -2,7 +2,6 @@
 
 #include <errno.h>
 #include <stdio.h>
-#include <stdlib.h>
 #include <string.h>
 #include <time.h>
 
@@ -38,8 +37,13 @@ void chip8_init(Chip8 *chip8)
 
     chip8->pc = CHIP8_PROGRAM_START;
 
-    /* Seed the random number generator used by CXNN. */
-    srand((unsigned int)time(NULL));
+    /* Seed the instance's own PRNG for CXNN. Keeping the generator inside
+     * the state (instead of global srand/rand) leaves no process-wide side
+     * effects and keeps the core embeddable. */
+    chip8->rng_state = (uint32_t)time(NULL) ^ 0x9E3779B9u;
+    if (chip8->rng_state == 0) {
+        chip8->rng_state = 0x12345678u;
+    }
 
     /* Default behavior: original COSMAC VIP. */
     chip8->quirks.shift_copies_vy = true;
@@ -97,6 +101,37 @@ bool chip8_load_rom(Chip8 *chip8, const char *path)
     return true;
 }
 
+/*
+ * Cycle-time errors are printed at most once per unique (pc, opcode)
+ * pair. A broken ROM looping on a bad instruction would otherwise emit
+ * thousands of identical lines per second (one write() syscall each,
+ * which is enough to stall the frame loop). When the log is full, new
+ * pairs are suppressed too, so stderr stays bounded for any input.
+ */
+static bool error_already_reported(Chip8 *chip8, uint16_t addr, uint16_t opcode)
+{
+    for (uint8_t k = 0; k < chip8->error_log_count; k++) {
+        if (chip8->error_log_pc[k] == addr && chip8->error_log_opcode[k] == opcode) {
+            return true;
+        }
+    }
+    if (chip8->error_log_count >= CHIP8_ERROR_LOG_SIZE) {
+        return true;
+    }
+    chip8->error_log_pc[chip8->error_log_count] = addr;
+    chip8->error_log_opcode[chip8->error_log_count] = opcode;
+    chip8->error_log_count = (uint8_t)(chip8->error_log_count + 1);
+    return false;
+}
+
+/* Reports an undefined opcode once per (pc, opcode) (see above). */
+static void report_unknown(Chip8 *chip8, uint16_t addr, uint16_t opcode)
+{
+    if (!error_already_reported(chip8, addr, opcode)) {
+        fprintf(stderr, "Opcode not implemented: 0x%04X\n", opcode);
+    }
+}
+
 void chip8_cycle(Chip8 *chip8)
 {
     /* Fetch: instructions are 2 bytes, big-endian. Addresses are 12 bits on
@@ -124,7 +159,9 @@ void chip8_cycle(Chip8 *chip8)
              * No VF effect. On underflow, the error is reported and the
              * instruction is skipped. */
             if (chip8->sp == 0) {
-                fprintf(stderr, "Stack underflow: 00EE executed with no active subroutines\n");
+                if (!error_already_reported(chip8, pc, opcode)) {
+                    fprintf(stderr, "Stack underflow: 00EE executed with no active subroutines\n");
+                }
             } else {
                 chip8->sp--;
                 chip8->pc = chip8->stack[chip8->sp];
@@ -145,8 +182,10 @@ void chip8_cycle(Chip8 *chip8)
          * instruction) on the stack and jump to NNN. No VF effect.
          * On overflow, the error is reported and the call is skipped. */
         if (chip8->sp >= CHIP8_STACK_DEPTH) {
-            fprintf(stderr, "Stack overflow: CALL 0x%03X with %d active subroutines\n",
-                    nnn, CHIP8_STACK_DEPTH);
+            if (!error_already_reported(chip8, pc, opcode)) {
+                fprintf(stderr, "Stack overflow: CALL 0x%03X with %d active subroutines\n",
+                        nnn, CHIP8_STACK_DEPTH);
+            }
         } else {
             chip8->stack[chip8->sp] = chip8->pc;
             chip8->sp = (uint8_t)(chip8->sp + 1);
@@ -158,7 +197,7 @@ void chip8_cycle(Chip8 *chip8)
         /* 3XNN - SE Vx, byte: skip the next instruction if VX == NN.
          * No VF effect. */
         if (chip8->v[x] == nn) {
-            chip8->pc = (uint16_t)(chip8->pc + 2);
+            chip8->pc = (uint16_t)((chip8->pc + 2) & 0x0FFF);
         }
         break;
 
@@ -166,7 +205,7 @@ void chip8_cycle(Chip8 *chip8)
         /* 4XNN - SNE Vx, byte: skip the next instruction if VX != NN.
          * No VF effect. */
         if (chip8->v[x] != nn) {
-            chip8->pc = (uint16_t)(chip8->pc + 2);
+            chip8->pc = (uint16_t)((chip8->pc + 2) & 0x0FFF);
         }
         break;
 
@@ -174,11 +213,11 @@ void chip8_cycle(Chip8 *chip8)
         /* 5XY0 - SE Vx, Vy: skip the next instruction if VX == VY.
          * No VF effect. N must be 0; 5XYN is not a defined opcode. */
         if (n != 0) {
-            fprintf(stderr, "Opcode not implemented: 0x%04X\n", opcode);
+            report_unknown(chip8, pc, opcode);
             break;
         }
         if (chip8->v[x] == chip8->v[y]) {
-            chip8->pc = (uint16_t)(chip8->pc + 2);
+            chip8->pc = (uint16_t)((chip8->pc + 2) & 0x0FFF);
         }
         break;
 
@@ -283,7 +322,7 @@ void chip8_cycle(Chip8 *chip8)
         }
 
         default:
-            fprintf(stderr, "Opcode not implemented: 0x%04X\n", opcode);
+            report_unknown(chip8, pc, opcode);
             break;
         }
         break;
@@ -293,11 +332,11 @@ void chip8_cycle(Chip8 *chip8)
         /* 9XY0 - SNE Vx, Vy: skip the next instruction if VX != VY.
          * No VF effect. N must be 0; 9XYN is not a defined opcode. */
         if (n != 0) {
-            fprintf(stderr, "Opcode not implemented: 0x%04X\n", opcode);
+            report_unknown(chip8, pc, opcode);
             break;
         }
         if (chip8->v[x] != chip8->v[y]) {
-            chip8->pc = (uint16_t)(chip8->pc + 2);
+            chip8->pc = (uint16_t)((chip8->pc + 2) & 0x0FFF);
         }
         break;
 
@@ -312,17 +351,22 @@ void chip8_cycle(Chip8 *chip8)
          * offset is VX instead, where X is the middle nibble of the
          * opcode. No VF effect. */
         if (chip8->quirks.jump_uses_v0) {
-            chip8->pc = (uint16_t)(nnn + chip8->v[0]);
+            chip8->pc = (uint16_t)((nnn + chip8->v[0]) & 0x0FFF);
         } else {
-            chip8->pc = (uint16_t)(nnn + chip8->v[x]);
+            chip8->pc = (uint16_t)((nnn + chip8->v[x]) & 0x0FFF);
         }
         break;
 
-    case 0xC:
+    case 0xC: {
         /* CXNN - RND Vx, byte: VX = (random byte) & NN. The mask limits
-         * the result to NN's bits. No VF effect. */
-        chip8->v[x] = (uint8_t)(rand() & nn);
+         * the result to NN's bits. Randomness comes from the instance's
+         * xorshift32 generator. No VF effect. */
+        chip8->rng_state ^= chip8->rng_state << 13;
+        chip8->rng_state ^= chip8->rng_state >> 17;
+        chip8->rng_state ^= chip8->rng_state << 5;
+        chip8->v[x] = (uint8_t)(chip8->rng_state & nn);
         break;
+    }
 
     case 0xD:
         /* DXYN - DRW Vx, Vy, nibble: draw an N-byte sprite at (VX, VY).
@@ -388,19 +432,19 @@ void chip8_cycle(Chip8 *chip8)
         case 0x9E:
             /* EX9E - SKP Vx: skip if the key is pressed. */
             if (chip8->keys[chip8->v[x] & 0x0F]) {
-                chip8->pc = (uint16_t)(chip8->pc + 2);
+                chip8->pc = (uint16_t)((chip8->pc + 2) & 0x0FFF);
             }
             break;
 
         case 0xA1:
             /* EXA1 - SKNP Vx: skip if the key is not pressed. */
             if (!chip8->keys[chip8->v[x] & 0x0F]) {
-                chip8->pc = (uint16_t)(chip8->pc + 2);
+                chip8->pc = (uint16_t)((chip8->pc + 2) & 0x0FFF);
             }
             break;
 
         default:
-            fprintf(stderr, "Opcode not implemented: 0x%04X\n", opcode);
+            report_unknown(chip8, pc, opcode);
             break;
         }
         break;
@@ -429,7 +473,7 @@ void chip8_cycle(Chip8 *chip8)
                 chip8->v[x] = (uint8_t)chip8->waiting_key;
                 chip8->waiting_for_key = false;
             } else {
-                chip8->pc = (uint16_t)(chip8->pc - 2);
+                chip8->pc = (uint16_t)((chip8->pc - 2) & 0x0FFF);
             }
             break;
 
@@ -512,13 +556,9 @@ void chip8_cycle(Chip8 *chip8)
             break;
 
         default:
-            fprintf(stderr, "Opcode not implemented: 0x%04X\n", opcode);
+            report_unknown(chip8, pc, opcode);
             break;
         }
-        break;
-
-    default:
-        fprintf(stderr, "Opcode not implemented: 0x%04X\n", opcode);
         break;
     }
 }

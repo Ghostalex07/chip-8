@@ -15,6 +15,8 @@ core can be tested headless.
 - Hex keypad mapped positionally over a QWERTY keyboard
 - Headless test harness that verifies the core against the
   [Timendus chip-8-test-suite](https://github.com/Timendus/chip8-test-suite)
+- An original bundled mini-game, `games/catch.ch8`, assembled from
+  `games/catch.asm` and covered by the test harness
 
 ![The test suite passing](docs/screenshot-tests.png)
 ![Space Invaders running](docs/screenshot-game.png)
@@ -81,9 +83,25 @@ CHIP-8:   1 2 3 C        Keyboard:  1 2 3 4
 
 `ESC` (or closing the window) exits the emulator.
 
+## Bundled game: CATCH
+
+An original mini-game included as a working example:
+
+```sh
+python3 games/assemble.py   # rebuilds games/catch.ch8 from the source
+./chip8 games/catch.ch8
+```
+
+![CATCH running](docs/screenshot-catch.png)
+
+A ball falls from the top; move the paddle under it with `A`/`D`
+(CHIP-8 keys 7/9). A catch beeps and adds a point (score at the top
+right); a miss beeps longer. Endless. `tests/test_catch.c` plays the
+game headless: catch, miss, paddle movement and score rendering.
+
 ## Getting ROMs
 
-ROMs are not included (see `roms/README.md`). Good sources:
+No third-party ROMs are included (see `roms/README.md`). Good sources:
 
 - [CHIP-8 Archive](https://johnearnest.github.io/chip8Archive/) — CC0,
   with previews and control notes for each program
@@ -103,5 +121,6 @@ SUITE_BIN=chip8-test-suite/bin tests/run_tests.sh
 ```
 
 `run_tests.sh` builds its own harness, runs every test ROM, checks the
-rendered framebuffers for the suite's ok/err markers, and fails on any
+rendered framebuffers for the suite's ok/err markers, plays the bundled
+CATCH game end-to-end (`tests/test_catch.c`), and fails on any
 unexpected stderr output.
