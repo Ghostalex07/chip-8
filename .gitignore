@@ -1,0 +1,5 @@
+*.o
+/chip8
+tests/.build/
+roms/*
+!roms/README.md
